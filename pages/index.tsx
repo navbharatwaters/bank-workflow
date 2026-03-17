@@ -311,16 +311,13 @@ export default function Home() {
         <main className="flex-1 max-w-5xl mx-auto w-full px-4 sm:px-6 py-10">
 
           {/* Hero */}
-          <div className="text-center mb-10 animate-fade-up">
-            <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight mb-4 leading-none" style={{ fontFamily: 'Syne, sans-serif', color: 'var(--text)' }}>
+          <div className="text-center mb-4 animate-fade-up">
+            <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight mb-2 leading-none" style={{ fontFamily: 'Syne, sans-serif', color: 'var(--text)' }}>
               Bank Statement<br/>
               <span style={{ background: 'linear-gradient(135deg, #3b82f6, #10b981)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
                 → Excel
               </span>
             </h1>
-            <p className="text-base max-w-md mx-auto" style={{ color: 'var(--text2)' }}>
-              Upload your Kotak Mahindra Bank PDF statement and download a professionally formatted, 3-sheet Excel workbook instantly.
-            </p>
           </div>
 
           {/* ── Two-column layout ── */}
