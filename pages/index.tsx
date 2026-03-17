@@ -312,10 +312,6 @@ export default function Home() {
 
           {/* Hero */}
           <div className="text-center mb-10 animate-fade-up">
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full mb-5 text-xs font-semibold tracking-widest uppercase" style={{ background: 'rgba(59,130,246,0.1)', color: 'var(--accent)', border: '1px solid rgba(59,130,246,0.2)', fontFamily: 'DM Mono, monospace' }}>
-              <span className="animate-pulse-dot" style={{ width: 7, height: 7, borderRadius: '50%', background: 'currentColor', display: 'inline-block' }}/>
-              Powered by n8n + LLMWhisperer
-            </div>
             <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight mb-4 leading-none" style={{ fontFamily: 'Syne, sans-serif', color: 'var(--text)' }}>
               Bank Statement<br/>
               <span style={{ background: 'linear-gradient(135deg, #3b82f6, #10b981)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
