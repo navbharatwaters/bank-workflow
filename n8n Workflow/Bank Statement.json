@@ -1,0 +1,170 @@
+{
+  "name": "Bank Statement",
+  "nodes": [
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "898a630d-004b-49a0-9b46-b359578a28fb",
+              "name": "file",
+              "value": "bank_statement",
+              "type": "binary"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1424,
+        144
+      ],
+      "id": "830719ef-7fc8-4ddf-a8d5-bc88a2d4c218",
+      "name": "Edit Fields3"
+    },
+    {
+      "parameters": {
+        "file_contents": "file",
+        "additionalOptions": {
+          "timeout": 300
+        }
+      },
+      "type": "n8n-nodes-unstract.llmWhisperer",
+      "typeVersion": 1,
+      "position": [
+        -1200,
+        144
+      ],
+      "id": "b547e7bf-d63e-44e3-9c9b-c92def46535c",
+      "name": "Extract text from document1",
+      "credentials": {
+        "llmWhispererApi": {
+          "id": "uyYe81dV77JGFwbi",
+          "name": "LLMWhisperer account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n//  KOTAK BANK STATEMENT → EXCEL  |  n8n Code Node\n//  ✅ ZERO require() calls — 100% pure JavaScript\n//  Works on any locked-down self-hosted n8n instance\n// ============================================================\n\n// ── 1. GET OCR TEXT FROM LLMWHISPERER ────────────────────────\nconst input = $input.item.json;\nlet fileText = '';\nif (Array.isArray(input)) {\n  fileText = input[0]?.result_text || '';\n} else if (input.result_text) {\n  fileText = input.result_text;\n} else if (input.ocr_text) {\n  fileText = input.ocr_text;\n}\nfileText = fileText.replace(/\\f/g, '\\n').trim();\nif (!fileText) throw new Error('No OCR text found from LLMWhisperer output.');\n\n// ── 2. PARSE TRANSACTIONS ────────────────────────────────────\nconst lines = fileText.split('\\n');\nconst transactionsRaw = [];\nlet currentFirst = null;\nlet currentCont = [];\n\nfor (const line of lines) {\n  const stripped = line.replace(/\\r$/, '');\n  if (/^       \\d{2}\\/\\d{2}\\/\\d{4}\\s+/.test(stripped)) {\n    if (currentFirst !== null) transactionsRaw.push([currentFirst, currentCont]);\n    currentFirst = stripped;\n    currentCont = [];\n  } else if (currentFirst !== null && stripped.trim() && /^                    /.test(stripped)) {\n    currentCont.push(stripped.trim());\n  } else {\n    if (currentFirst !== null) {\n      transactionsRaw.push([currentFirst, currentCont]);\n      currentFirst = null; currentCont = [];\n    }\n  }\n}\nif (currentFirst !== null) transactionsRaw.push([currentFirst, currentCont]);\n\nfunction cleanBeneficiary(name) {\n  return name.replace(/\\bTransfer\\b/g, '').replace(/\\s+\\d{3,5}$/, '').replace(/\\s+/g, ' ').trim();\n}\n\nfunction parseTransaction(firstLine, contLines) {\n  const m = firstLine.match(/^\\s+(\\d{2}\\/\\d{2}\\/\\d{4})\\s+(.*)/);\n  if (!m) return null;\n  const dateStr = m[1]; let rest = m[2];\n\n  let status = '';\n  const sm = rest.match(/(Success|Failure|Pending)\\s*$/i);\n  if (sm) { status = sm[1]; rest = rest.slice(0, rest.lastIndexOf(sm[0])).trim(); }\n\n  let amount = 0;\n  const am = rest.match(/([\\d,]+\\.\\d{2})\\s+INR\\s*$/);\n  if (am) { amount = parseFloat(am[1].replace(/,/g, '')); rest = rest.slice(0, rest.lastIndexOf(am[0])).trim(); }\n\n  if (/\\b4611940519\\b/.test(rest)) rest = rest.slice(0, rest.search(/\\b4611940519\\b/)).trim();\n\n  let txnId = '';\n  const tim = rest.match(/(\\d{7,12})\\s*$/);\n  if (tim) { txnId = tim[1]; rest = rest.slice(0, rest.lastIndexOf(tim[0])).trim(); }\n\n  let transferType = '', refId = '', beneficiaryPartial = rest;\n  for (const [pattern, ttype] of [\n    [/\\s+(Third\\s+Party\\s+Transfer)\\s+/i, 'Third Party Transfer'],\n    [/\\s+(Third\\s+Party)\\s+/i,            'Third Party Transfer'],\n    [/\\s+(IMPS)\\s+/i,                     'IMPS'],\n    [/\\s+(Payment)\\s+/i,                  'Payment'],\n  ]) {\n    const mm = rest.match(pattern);\n    if (mm) {\n      transferType = ttype;\n      beneficiaryPartial = rest.slice(0, mm.index).trim();\n      refId = rest.slice(mm.index + mm[0].length).trim();\n      break;\n    }\n  }\n\n  const contParts = contLines\n    .map(cl => transferType === 'Third Party Transfer' ? cl.replace(/^Transfer\\s*/, '').trim() : cl)\n    .filter(Boolean);\n\n  let beneficiary = beneficiaryPartial;\n  if (contParts.length) beneficiary = (beneficiaryPartial + ' ' + contParts.join(' ')).trim();\n  beneficiary = cleanBeneficiary(beneficiary);\n\n  const [dd, mm2, yyyy] = dateStr.split('/');\n  const dateObj = new Date(`${yyyy}-${mm2}-${dd}`);\n  return { date: dateObj, dateStr, beneficiary, transferType, refId, txnId, debitAccount: '4611940519', amount, status };\n}\n\nconst transactions = transactionsRaw\n  .map(([f, c]) => parseTransaction(f, c))\n  .filter(t => t && t.date && !isNaN(t.date));\n\nif (!transactions.length) throw new Error('No transactions parsed. Check OCR output format.');\n\n// ── 3. STATS ─────────────────────────────────────────────────\nconst totalAmount  = transactions.reduce((s, t) => s + t.amount, 0);\nconst successCount = transactions.filter(t => t.status === 'Success').length;\nconst failureCount = transactions.filter(t => t.status === 'Failure').length;\nconst dates        = transactions.map(t => t.date);\nconst dateMin      = new Date(Math.min(...dates));\nconst dateMax      = new Date(Math.max(...dates));\nconst fmtDate      = d => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });\nconst fmtNum       = n => n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\n\nconst monthlyMap = {};\nfor (const t of transactions) {\n  const key = `${t.date.getFullYear()}-${String(t.date.getMonth()+1).padStart(2,'0')}`;\n  if (!monthlyMap[key]) monthlyMap[key] = { count:0, total:0, success:0 };\n  monthlyMap[key].count++; monthlyMap[key].total += t.amount;\n  if (t.status === 'Success') monthlyMap[key].success++;\n}\n\nconst beneMap = {};\nfor (const t of transactions) {\n  if (!beneMap[t.beneficiary]) beneMap[t.beneficiary] = { total:0, count:0 };\n  beneMap[t.beneficiary].total += t.amount; beneMap[t.beneficiary].count++;\n}\nconst top10 = Object.entries(beneMap).sort((a, b) => b[1].total - a[1].total).slice(0, 10);\n\nconst typeMap = {};\nfor (const t of transactions) {\n  const k = t.transferType || 'Unidentified';\n  if (!typeMap[k]) typeMap[k] = { count:0, total:0 };\n  typeMap[k].count++; typeMap[k].total += t.amount;\n}\n\n// ── 4. PURE JS DEFLATE + ZIP + XLSX ──────────────────────────\n// No require() — everything implemented from scratch in pure JS\n\n// ── 4a. String → UTF-8 bytes (as number array) ──\nfunction strToBytes(str) {\n  const out = [];\n  for (let i = 0; i < str.length; i++) {\n    let c = str.charCodeAt(i);\n    if (c < 0x80) {\n      out.push(c);\n    } else if (c < 0x800) {\n      out.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F));\n    } else if (c >= 0xD800 && c <= 0xDBFF && i+1 < str.length) {\n      const c2 = str.charCodeAt(i+1);\n      if (c2 >= 0xDC00 && c2 <= 0xDFFF) {\n        const cp = 0x10000 + ((c - 0xD800) << 10) + (c2 - 0xDC00);\n        out.push(0xF0|(cp>>18), 0x80|((cp>>12)&0x3F), 0x80|((cp>>6)&0x3F), 0x80|(cp&0x3F));\n        i++;\n      }\n    } else {\n      out.push(0xE0|(c>>12), 0x80|((c>>6)&0x3F), 0x80|(c&0x3F));\n    }\n  }\n  return out;\n}\n\n// ── 4b. CRC-32 ──\nconst CRC_TABLE = (() => {\n  const t = new Array(256);\n  for (let i = 0; i < 256; i++) {\n    let c = i;\n    for (let k = 0; k < 8; k++) c = (c & 1) ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;\n    t[i] = c >>> 0;\n  }\n  return t;\n})();\n\nfunction crc32(bytes) {\n  let crc = 0xFFFFFFFF;\n  for (let i = 0; i < bytes.length; i++) crc = CRC_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);\n  return (crc ^ 0xFFFFFFFF) >>> 0;\n}\n\n// ── 4c. Deflate (STORE mode — no compression, still valid ZIP/XLSX) ──\n// Using STORE (method=0) avoids needing a deflate implementation entirely.\n// File size is larger but 100% compatible with Excel.\nfunction deflateStore(bytes) {\n  // STORE = no compression. ZIP method 0.\n  return { compressed: bytes, method: 0 };\n}\n\n// ── 4d. Little-endian helpers (pure arrays) ──\nfunction u16(n) { return [n & 0xFF, (n >> 8) & 0xFF]; }\nfunction u32(n) { n = n >>> 0; return [n & 0xFF, (n>>8)&0xFF, (n>>16)&0xFF, (n>>24)&0xFF]; }\n\n// ── 4e. Build a single ZIP entry ──\nfunction makeZipEntry(filename, contentStr) {\n  const nameBytes    = strToBytes(filename);\n  const contentBytes = strToBytes(contentStr);\n  const { compressed, method } = deflateStore(contentBytes);\n  const crc          = crc32(contentBytes);\n  const now          = new Date();\n  const dosDate      = ((now.getFullYear()-1980)<<9)|((now.getMonth()+1)<<5)|now.getDate();\n  const dosTime      = (now.getHours()<<11)|(now.getMinutes()<<5)|(now.getSeconds()>>1);\n\n  // Local file header\n  const localHeader = [\n    0x50,0x4B,0x03,0x04,        // signature\n    ...u16(20),                  // version needed\n    ...u16(0),                   // flags\n    ...u16(method),              // compression method (0=store)\n    ...u16(dosTime),\n    ...u16(dosDate),\n    ...u32(crc),\n    ...u32(compressed.length),   // compressed size\n    ...u32(contentBytes.length), // uncompressed size\n    ...u16(nameBytes.length),\n    ...u16(0),                   // extra field length\n    ...nameBytes,\n  ];\n\n  return {\n    localHeader,\n    data: compressed,\n    nameBytes,\n    crc,\n    method,\n    dosTime,\n    dosDate,\n    compressedSize:   compressed.length,\n    uncompressedSize: contentBytes.length,\n  };\n}\n\n// ── 4f. Build complete ZIP file ──\nfunction buildZip(files) {\n  const entries = files.map(([name, content]) => makeZipEntry(name, content));\n  const allBytes = [];\n  const centralDirInfos = [];\n  let offset = 0;\n\n  // Local entries\n  for (const e of entries) {\n    centralDirInfos.push({ entry: e, offset });\n    for (const b of e.localHeader) allBytes.push(b);\n    for (const b of e.data)        allBytes.push(b);\n    offset += e.localHeader.length + e.data.length;\n  }\n\n  // Central directory\n  const centralStart = offset;\n  for (const { entry: e, offset: localOffset } of centralDirInfos) {\n    const cd = [\n      0x50,0x4B,0x01,0x02,        // signature\n      ...u16(20),                  // version made by\n      ...u16(20),                  // version needed\n      ...u16(0),                   // flags\n      ...u16(e.method),\n      ...u16(e.dosTime),\n      ...u16(e.dosDate),\n      ...u32(e.crc),\n      ...u32(e.compressedSize),\n      ...u32(e.uncompressedSize),\n      ...u16(e.nameBytes.length),\n      ...u16(0),                   // extra\n      ...u16(0),                   // comment\n      ...u16(0),                   // disk start\n      ...u16(0),                   // internal attr\n      ...u32(0),                   // external attr\n      ...u32(localOffset),\n      ...e.nameBytes,\n    ];\n    for (const b of cd) allBytes.push(b);\n    offset += cd.length;\n  }\n\n  // End of central directory\n  const centralSize = offset - centralStart;\n  const eocd = [\n    0x50,0x4B,0x05,0x06,\n    ...u16(0), ...u16(0),\n    ...u16(entries.length),\n    ...u16(entries.length),\n    ...u32(centralSize),\n    ...u32(centralStart),\n    ...u16(0),\n  ];\n  for (const b of eocd) allBytes.push(b);\n\n  return allBytes;\n}\n\n// ── 4g. Convert byte array → Base64 (pure JS) ──\nfunction bytesToBase64(bytes) {\n  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';\n  let result = '';\n  let i = 0;\n  while (i < bytes.length) {\n    const b0 = bytes[i++] || 0;\n    const b1 = bytes[i++];\n    const b2 = bytes[i++];\n    result += chars[b0 >> 2];\n    result += chars[((b0 & 3) << 4) | ((b1 ?? 0) >> 4)];\n    result += b1 !== undefined ? chars[((b1 & 15) << 2) | ((b2 ?? 0) >> 6)] : '=';\n    result += b2 !== undefined ? chars[b2 & 63] : '=';\n  }\n  return result;\n}\n\n// ── 5. BUILD XLSX XML ─────────────────────────────────────────\nfunction xmlEsc(v) {\n  return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');\n}\n\n// Shared strings table\nconst ssArr = [], ssMap = {};\nfunction ss(val) {\n  const s = String(val ?? '');\n  if (ssMap[s] === undefined) { ssMap[s] = ssArr.length; ssArr.push(s); }\n  return ssMap[s];\n}\n\nfunction colLetter(n) {\n  let s = '';\n  while (n > 0) { s = String.fromCharCode(64 + (n % 26 || 26)) + s; n = Math.floor((n-1) / 26); }\n  return s;\n}\nfunction ref(r, c) { return colLetter(c) + r; }\nfunction sCell(r, c, val, si=0) { return `<c r=\"${ref(r,c)}\" t=\"s\" s=\"${si}\"><v>${ss(val)}</v></c>`; }\nfunction nCell(r, c, val, si=0) { return `<c r=\"${ref(r,c)}\" s=\"${si}\"><v>${parseFloat(val)||0}</v></c>`; }\n\n// Style indices:\n// 0=normal, 1=header(navy bg white bold), 2=title(large), 3=amount,\n// 4=alt row, 5=total, 6=success, 7=failure, 8=kv-label, 9=kv-value-num\n\nfunction buildSheet1() {\n  const rows = []; let r = 1;\n  rows.push(`<row r=\"${r}\">${sCell(r,1,'KOTAK MAHINDRA BANK — COMPLETED TRANSFERS STATEMENT',2)}</row>`); r++;\n  rows.push(`<row r=\"${r}\">${sCell(r,1,`Account: 4611940519  |  Period: ${fmtDate(dateMin)} — ${fmtDate(dateMax)}  |  Transactions: ${transactions.length.toLocaleString()}  |  Total: INR ${fmtNum(totalAmount)}`,1)}</row>`); r++;\n  rows.push(`<row r=\"${r}\"></row>`); r++;\n  const hdr = ['Date','Beneficiary Name','Transfer Type','Reference / Account No','Transaction ID','Debit Account','Amount (INR)','Status'];\n  rows.push(`<row r=\"${r}\">${hdr.map((h,i)=>sCell(r,i+1,h,1)).join('')}</row>`); r++;\n\n  for (let i = 0; i < transactions.length; i++) {\n    const t = transactions[i];\n    const s = t.status==='Failure' ? 7 : i%2===1 ? 4 : 0;\n    const ns = t.status==='Failure' ? 7 : i%2===1 ? 4 : 3;\n    const ss2 = t.status==='Success' ? 6 : t.status==='Failure' ? 7 : s;\n    rows.push(`<row r=\"${r}\">\n      ${sCell(r,1,t.dateStr,s)}${sCell(r,2,t.beneficiary,s)}${sCell(r,3,t.transferType,s)}\n      ${sCell(r,4,t.refId,s)}${sCell(r,5,t.txnId,s)}${sCell(r,6,t.debitAccount,s)}\n      ${nCell(r,7,t.amount,ns)}${sCell(r,8,t.status,ss2)}\n    </row>`); r++;\n  }\n  rows.push(`<row r=\"${r}\"></row>`); r++;\n  const tr = r;\n  rows.push(`<row r=\"${r}\">${sCell(r,1,'GRAND TOTAL',5)}${sCell(r,2,'',5)}${sCell(r,3,'',5)}${sCell(r,4,'',5)}${sCell(r,5,'',5)}${sCell(r,6,'',5)}${nCell(r,7,totalAmount,5)}${sCell(r,8,`${successCount} Success / ${failureCount} Failure`,5)}</row>`);\n\n  return `<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n<sheetViews><sheetView workbookViewId=\"0\"><pane ySplit=\"4\" topLeftCell=\"A5\" activePane=\"bottomLeft\" state=\"frozen\"/></sheetView></sheetViews>\n<cols><col min=\"1\" max=\"1\" width=\"14\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"32\" customWidth=\"1\"/><col min=\"3\" max=\"3\" width=\"22\" customWidth=\"1\"/><col min=\"4\" max=\"4\" width=\"24\" customWidth=\"1\"/><col min=\"5\" max=\"5\" width=\"15\" customWidth=\"1\"/><col min=\"6\" max=\"6\" width=\"16\" customWidth=\"1\"/><col min=\"7\" max=\"7\" width=\"18\" customWidth=\"1\"/><col min=\"8\" max=\"8\" width=\"14\" customWidth=\"1\"/></cols>\n<sheetData>${rows.join('')}</sheetData>\n<mergeCells count=\"3\"><mergeCell ref=\"A1:H1\"/><mergeCell ref=\"A2:H2\"/><mergeCell ref=\"A${tr}:F${tr}\"/></mergeCells>\n</worksheet>`;\n}\n\nfunction buildSheet2() {\n  const rows = []; let r = 1;\n  const R = (cells) => { rows.push(`<row r=\"${r}\">${cells}</row>`); r++; };\n  const E = () => { rows.push(`<row r=\"${r}\"></row>`); r++; };\n\n  R(sCell(r,1,'BANK STATEMENT SUMMARY — KOTAK MAHINDRA BANK',2));\n  E();\n  R(sCell(r,1,'ACCOUNT OVERVIEW',1));\n  R(sCell(r,1,'Account Number',8)+sCell(r,2,'4611940519',0));\n  R(sCell(r,1,'Bank Name',8)+sCell(r,2,'Kotak Mahindra Bank',0));\n  R(sCell(r,1,'Statement Period',8)+sCell(r,2,`${fmtDate(dateMin)} to ${fmtDate(dateMax)}`,0));\n  R(sCell(r,1,'Total Transactions',8)+nCell(r,2,transactions.length,9));\n  R(sCell(r,1,'Successful',8)+nCell(r,2,successCount,9));\n  R(sCell(r,1,'Failed',8)+nCell(r,2,failureCount,9));\n  E();\n  R(sCell(r,1,'FINANCIAL SUMMARY',1));\n  R(sCell(r,1,'Total Amount Debited (INR)',8)+nCell(r,2,totalAmount,9));\n  R(sCell(r,1,'Average Transaction (INR)',8)+nCell(r,2,totalAmount/transactions.length,9));\n  R(sCell(r,1,'Largest Transaction (INR)',8)+nCell(r,2,Math.max(...transactions.map(t=>t.amount)),9));\n  R(sCell(r,1,'Smallest Transaction (INR)',8)+nCell(r,2,Math.min(...transactions.filter(t=>t.amount>0).map(t=>t.amount)),9));\n  E();\n  R(sCell(r,1,'BY TRANSFER TYPE',1)+sCell(r,2,'',1)+sCell(r,3,'',1));\n  R(sCell(r,1,'Transfer Type',1)+sCell(r,2,'Count',1)+sCell(r,3,'Total Amount (INR)',1));\n  for(const [k,v] of Object.entries(typeMap).sort((a,b)=>b[1].total-a[1].total)){\n    R(sCell(r,1,k,8)+nCell(r,2,v.count,0)+nCell(r,3,v.total,9));\n  }\n  E();\n  R(sCell(r,1,'TOP 10 BENEFICIARIES',1)+sCell(r,2,'',1)+sCell(r,3,'',1));\n  R(sCell(r,1,'Beneficiary Name',1)+sCell(r,2,'Total Amount (INR)',1)+sCell(r,3,'Transactions',1));\n  for(const [name,v] of top10){\n    R(sCell(r,1,name,8)+nCell(r,2,v.total,9)+nCell(r,3,v.count,0));\n  }\n\n  return `<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n<cols><col min=\"1\" max=\"1\" width=\"36\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"24\" customWidth=\"1\"/><col min=\"3\" max=\"3\" width=\"22\" customWidth=\"1\"/></cols>\n<sheetData>${rows.join('')}</sheetData>\n<mergeCells count=\"1\"><mergeCell ref=\"A1:C1\"/></mergeCells>\n</worksheet>`;\n}\n\nfunction buildSheet3() {\n  const rows = []; let r = 1;\n  rows.push(`<row r=\"${r}\">${sCell(r,1,'MONTHLY TRANSACTION ANALYSIS',2)}</row>`); r++;\n  rows.push(`<row r=\"${r}\"></row>`); r++;\n  rows.push(`<row r=\"${r}\">${['Month','No. of Transactions','Total Amount (INR)','Avg Amount (INR)','Success Rate'].map((h,i)=>sCell(r,i+1,h,1)).join('')}</row>`); r++;\n\n  const sorted = Object.entries(monthlyMap).sort((a,b)=>b[0].localeCompare(a[0]));\n  for(let i=0;i<sorted.length;i++){\n    const [month,v] = sorted[i];\n    const s = i%2===1 ? 4 : 0;\n    const sr = ((v.success/v.count)*100).toFixed(1)+'%';\n    rows.push(`<row r=\"${r}\">${sCell(r,1,month,s)}${nCell(r,2,v.count,s)}${nCell(r,3,v.total,3)}${nCell(r,4,v.total/v.count,3)}${sCell(r,5,sr,s)}</row>`); r++;\n  }\n  rows.push(`<row r=\"${r}\"></row>`); r++;\n  const totC = Object.values(monthlyMap).reduce((s,v)=>s+v.count,0);\n  const totT = Object.values(monthlyMap).reduce((s,v)=>s+v.total,0);\n  rows.push(`<row r=\"${r}\">${sCell(r,1,'GRAND TOTAL',5)}${nCell(r,2,totC,5)}${nCell(r,3,totT,5)}${sCell(r,4,'',5)}${sCell(r,5,'',5)}</row>`);\n\n  return `<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n<sheetViews><sheetView workbookViewId=\"0\"><pane ySplit=\"3\" topLeftCell=\"A4\" activePane=\"bottomLeft\" state=\"frozen\"/></sheetView></sheetViews>\n<cols><col min=\"1\" max=\"1\" width=\"16\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"20\" customWidth=\"1\"/><col min=\"3\" max=\"3\" width=\"22\" customWidth=\"1\"/><col min=\"4\" max=\"4\" width=\"22\" customWidth=\"1\"/><col min=\"5\" max=\"5\" width=\"16\" customWidth=\"1\"/></cols>\n<sheetData>${rows.join('')}</sheetData>\n<mergeCells count=\"1\"><mergeCell ref=\"A1:E1\"/></mergeCells>\n</worksheet>`;\n}\n\n// Build all sheets first (populates ssArr)\nconst sheet1Xml = buildSheet1();\nconst sheet2Xml = buildSheet2();\nconst sheet3Xml = buildSheet3();\n\n// Shared strings (built after sheets so all strings are collected)\nconst sharedStringsXml = `<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"${ssArr.length}\" uniqueCount=\"${ssArr.length}\">\n${ssArr.map(s=>`<si><t xml:space=\"preserve\">${xmlEsc(s)}</t></si>`).join('')}\n</sst>`;\n\nconst stylesXml = `<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n<fonts count=\"6\">\n  <font><sz val=\"10\"/><name val=\"Arial\"/></font>\n  <font><b/><sz val=\"10\"/><color rgb=\"FFFFFFFF\"/><name val=\"Arial\"/></font>\n  <font><b/><sz val=\"13\"/><color rgb=\"FFFFFFFF\"/><name val=\"Arial\"/></font>\n  <font><b/><sz val=\"10\"/><color rgb=\"FF1B7F4A\"/><name val=\"Arial\"/></font>\n  <font><b/><sz val=\"10\"/><color rgb=\"FFCC0000\"/><name val=\"Arial\"/></font>\n  <font><b/><sz val=\"10\"/><color rgb=\"FF1B3A6B\"/><name val=\"Arial\"/></font>\n</fonts>\n<fills count=\"6\">\n  <fill><patternFill patternType=\"none\"/></fill>\n  <fill><patternFill patternType=\"gray125\"/></fill>\n  <fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF1B3A6B\"/></patternFill></fill>\n  <fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFEEF4FF\"/></patternFill></fill>\n  <fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFFFEBEE\"/></patternFill></fill>\n  <fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF2C4F8A\"/></patternFill></fill>\n</fills>\n<borders count=\"2\">\n  <border><left/><right/><top/><bottom/><diagonal/></border>\n  <border><left style=\"thin\"><color rgb=\"FFC5CAE9\"/></left><right style=\"thin\"><color rgb=\"FFC5CAE9\"/></right><top style=\"thin\"><color rgb=\"FFC5CAE9\"/></top><bottom style=\"thin\"><color rgb=\"FFC5CAE9\"/></bottom></border>\n</borders>\n<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>\n<cellXfs count=\"10\">\n  <xf numFmtId=\"0\"  fontId=\"0\" fillId=\"0\" borderId=\"1\" xfId=\"0\"><alignment vertical=\"center\"/></xf>\n  <xf numFmtId=\"0\"  fontId=\"1\" fillId=\"2\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"><alignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/></xf>\n  <xf numFmtId=\"0\"  fontId=\"2\" fillId=\"2\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"><alignment horizontal=\"center\" vertical=\"center\"/></xf>\n  <xf numFmtId=\"4\"  fontId=\"5\" fillId=\"0\" borderId=\"1\" xfId=\"0\" applyFont=\"1\" applyNumberFormat=\"1\"><alignment horizontal=\"right\" vertical=\"center\"/></xf>\n  <xf numFmtId=\"0\"  fontId=\"0\" fillId=\"3\" borderId=\"1\" xfId=\"0\" applyFill=\"1\"><alignment vertical=\"center\"/></xf>\n  <xf numFmtId=\"0\"  fontId=\"1\" fillId=\"2\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"><alignment horizontal=\"right\" vertical=\"center\"/></xf>\n  <xf numFmtId=\"0\"  fontId=\"3\" fillId=\"0\" borderId=\"1\" xfId=\"0\" applyFont=\"1\"><alignment horizontal=\"center\" vertical=\"center\"/></xf>\n  <xf numFmtId=\"0\"  fontId=\"4\" fillId=\"4\" borderId=\"1\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"><alignment horizontal=\"center\" vertical=\"center\"/></xf>\n  <xf numFmtId=\"0\"  fontId=\"5\" fillId=\"5\" borderId=\"1\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"><alignment horizontal=\"left\" vertical=\"center\" indent=\"1\"/></xf>\n  <xf numFmtId=\"4\"  fontId=\"5\" fillId=\"3\" borderId=\"1\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyNumberFormat=\"1\"><alignment horizontal=\"right\" vertical=\"center\"/></xf>\n</cellXfs>\n</styleSheet>`;\n\nconst contentTypesXml = `<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\n  <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\n  <Default Extension=\"xml\"  ContentType=\"application/xml\"/>\n  <Override PartName=\"/xl/workbook.xml\"           ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>\n  <Override PartName=\"/xl/worksheets/sheet1.xml\"  ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>\n  <Override PartName=\"/xl/worksheets/sheet2.xml\"  ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>\n  <Override PartName=\"/xl/worksheets/sheet3.xml\"  ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>\n  <Override PartName=\"/xl/sharedStrings.xml\"      ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/>\n  <Override PartName=\"/xl/styles.xml\"             ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>\n</Types>`;\n\nconst relsXml = `<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n  <Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/>\n</Relationships>`;\n\nconst workbookXml = `<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n  <sheets>\n    <sheet name=\"Transactions\"     sheetId=\"1\" r:id=\"rId1\"/>\n    <sheet name=\"Summary\"          sheetId=\"2\" r:id=\"rId2\"/>\n    <sheet name=\"Monthly Analysis\" sheetId=\"3\" r:id=\"rId3\"/>\n  </sheets>\n</workbook>`;\n\nconst workbookRelsXml = `<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n  <Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\"     Target=\"worksheets/sheet1.xml\"/>\n  <Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\"     Target=\"worksheets/sheet2.xml\"/>\n  <Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\"     Target=\"worksheets/sheet3.xml\"/>\n  <Relationship Id=\"rId4\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" Target=\"sharedStrings.xml\"/>\n  <Relationship Id=\"rId5\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\"        Target=\"styles.xml\"/>\n</Relationships>`;\n\n// ── 6. ASSEMBLE AND OUTPUT ────────────────────────────────────\nconst zipBytes = buildZip([\n  ['[Content_Types].xml',         contentTypesXml],\n  ['_rels/.rels',                 relsXml],\n  ['xl/workbook.xml',             workbookXml],\n  ['xl/_rels/workbook.xml.rels',  workbookRelsXml],\n  ['xl/styles.xml',               stylesXml],\n  ['xl/sharedStrings.xml',        sharedStringsXml],\n  ['xl/worksheets/sheet1.xml',    sheet1Xml],\n  ['xl/worksheets/sheet2.xml',    sheet2Xml],\n  ['xl/worksheets/sheet3.xml',    sheet3Xml],\n]);\n\nconst base64Data     = bytesToBase64(zipBytes);\nconst outputFilename = `Kotak_Statement_${fmtDate(dateMin).replace(/ /g,'_')}_to_${fmtDate(dateMax).replace(/ /g,'_')}.xlsx`;\n\nreturn [{\n  json: {\n    success:          true,\n    transactionCount: transactions.length,\n    totalAmount,\n    successCount,\n    failureCount,\n    periodFrom:       fmtDate(dateMin),\n    periodTo:         fmtDate(dateMax),\n    outputFilename,\n  },\n  binary: {\n    data: {\n      data:          base64Data,\n      mimeType:      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',\n      fileName:      outputFilename,\n      fileExtension: 'xlsx',\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1008,
+        144
+      ],
+      "id": "4ab99003-1b42-42ea-8dc0-13c470f1e43c",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "formTitle": "BankStatement",
+        "formDescription": "Upload Bank Statement",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "bank_statement",
+              "fieldType": "file"
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.5,
+      "position": [
+        -1712,
+        160
+      ],
+      "id": "ab62aa01-e5a4-4462-af3b-7e9d2f3e625f",
+      "name": "On form submission",
+      "webhookId": "4009a471-6422-42f0-91c8-27657867a87c"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "bank",
+        "responseMode": "lastNode",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1696,
+        32
+      ],
+      "id": "fbcf2c9b-aa6d-4b15-82bc-b33e8acf4700",
+      "name": "Webhook",
+      "webhookId": "7715865a-fab5-45ab-9293-67a5f9d04fd7"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Edit Fields3": {
+      "main": [
+        [
+          {
+            "node": "Extract text from document1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract text from document1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        []
+      ]
+    },
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "e2d3ee20-1002-4f69-bd79-aaccf6923bda",
+  "meta": {
+    "instanceId": "7f4964213c499c0a00fcdef02cf0f3ed898f3fd3e5d5644392d27033c3c67f74"
+  },
+  "id": "TevWcSie9Jd0N1oiN5TSk",
+  "tags": []
+}

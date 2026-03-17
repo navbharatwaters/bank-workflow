@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 60">
+  <!-- iKargos logo - dark mode compatible -->
+  <text x="10" y="35" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#FF6B35">i</text>
+  <text x="25" y="35" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="currentColor">K</text>
+  <path d="M 45 20 L 55 30 L 45 40" stroke="currentColor" stroke-width="3" fill="none"/>
+  <text x="65" y="35" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="currentColor">argos</text>
+  <text x="10" y="52" font-family="Arial, sans-serif" font-size="10" fill="currentColor" opacity="0.6">Logistics. </text>
+  <text x="65" y="52" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#FF6B35">Simplified.</text>
+</svg>

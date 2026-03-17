@@ -1,0 +1,21 @@
+[Unit]
+Description=BankFlow Next.js App
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/var/www/bankflow
+ExecStart=/usr/bin/node node_modules/.bin/next start -p 3000
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bankflow
+
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=N8N_WEBHOOK=https://n8n.navbharatwater.one/webhook/bank
+
+[Install]
+WantedBy=multi-user.target

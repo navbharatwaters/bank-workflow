@@ -1,0 +1,26 @@
+# ── Caddyfile for BankFlow Next.js App ──────────────────────
+# Replace bank.yourdomain.com with your actual domain/subdomain
+# e.g.: bank.navbharatwater.one
+
+bank.yourdomain.com {
+    reverse_proxy localhost:3000
+
+    encode gzip
+
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+
+    log {
+        output file /var/log/caddy/bankflow.log
+        format json
+    }
+}
+
+# ── For local/IP testing without a domain:
+# :80 {
+#     reverse_proxy localhost:3000
+# }
