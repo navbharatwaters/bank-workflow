@@ -280,7 +280,7 @@ export default function Home() {
 
         {/* ── Header ── */}
         <header className="sticky top-0 z-50 backdrop-blur-xl" style={{ borderBottom: '1px solid var(--border)', background: 'rgba(8,15,30,0.75)' }}>
-          <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
+          <div className="max-w-5xl mx-auto px-4 sm:px-6 py-1.5 flex items-center justify-between">
             {/* Left side - Ikargos Logo */}
             <div className="flex flex-col items-start">
               <img 
