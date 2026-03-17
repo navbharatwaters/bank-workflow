@@ -1,8 +1,8 @@
 module.exports = {
   apps: [{
     name: 'bank-workflow',
-    script: 'npx',
-    args: 'next start -p 3003',
+    script: 'npm',
+    args: 'start',
     env: {
       PORT: 3003,
       NODE_ENV: 'production'
